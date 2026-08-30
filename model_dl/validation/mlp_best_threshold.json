@@ -1,0 +1,6 @@
+{
+  "selection_metric": "validation_accuracy",
+  "best_threshold": 0.511,
+  "validation_accuracy": 0.857248286768582,
+  "validation_roc_auc": 0.9362976047454894
+}

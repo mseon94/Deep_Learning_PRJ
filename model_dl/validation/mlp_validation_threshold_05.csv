@@ -1,0 +1,2 @@
+﻿model,data_split,epochs,threshold,accuracy,precision,recall,f1,roc_auc,tn,fp,fn,tp
+Selected MLP,validation,107,0.5,0.8568792830785451,0.8183413777972796,0.7915959252971138,0.8047464940668824,0.9362976047454894,10660,1242,1473,5595

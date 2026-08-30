@@ -1,0 +1,13 @@
+{
+  "units": [
+    256,
+    128,
+    64
+  ],
+  "dropout": 0.3,
+  "l2": 1e-05,
+  "learning_rate": 0.001,
+  "batch_size": 512,
+  "batch_norm": false,
+  "config_key": "{\"batch_norm\": false, \"batch_size\": 512, \"dropout\": 0.3, \"l2\": 1e-05, \"learning_rate\": 0.001, \"units\": [256, 128, 64]}"
+}

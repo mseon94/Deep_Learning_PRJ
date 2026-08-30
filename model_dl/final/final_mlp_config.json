@@ -1,0 +1,22 @@
+{
+  "model_type": "MLP Binary Classifier",
+  "units": [
+    256,
+    128,
+    64
+  ],
+  "hidden_activation": "relu",
+  "output_activation": "sigmoid",
+  "optimizer": "Adam",
+  "learning_rate": 0.0005,
+  "dropout": 0.4,
+  "l2": 0.0005,
+  "batch_size": 512,
+  "batch_norm": true,
+  "final_epochs": 107,
+  "input_features": 64,
+  "default_threshold": 0.5,
+  "optimized_threshold": 0.511,
+  "threshold_selection_metric": "validation_accuracy",
+  "final_training_seconds": 194.44958780007437
+}

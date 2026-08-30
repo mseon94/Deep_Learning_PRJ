@@ -1,0 +1,15 @@
+{
+  "units": [
+    512,
+    256,
+    128
+  ],
+  "optimizer": "SGD",
+  "learning_rate": 0.01,
+  "dropout": 0.3,
+  "l2": 1e-05,
+  "batch_size": 512,
+  "batch_norm": false,
+  "activation": "relu",
+  "config_key": "{\"activation\": \"relu\", \"batch_norm\": false, \"batch_size\": 512, \"dropout\": 0.3, \"l2\": 1e-05, \"learning_rate\": 0.01, \"optimizer\": \"SGD\", \"units\": [512, 256, 128]}"
+}

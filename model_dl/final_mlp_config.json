@@ -1,0 +1,15 @@
+{
+  "units": [
+    256,
+    128,
+    64
+  ],
+  "activation": "relu",
+  "optimizer": "Adam",
+  "learning_rate": 0.0005,
+  "dropout": 0.4,
+  "l2": 0.0005,
+  "batch_size": 512,
+  "batch_norm": true,
+  "final_epoch": 107
+}

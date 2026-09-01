@@ -1,0 +1,28 @@
+{
+  "schema_version": 2,
+  "model": "MLP",
+  "selection_split": "Validation",
+  "method": "expected_loss_quantiles",
+  "q50": 60.261748758,
+  "q75": 198.637126635,
+  "validation_n": 18970,
+  "test_n": 23712,
+  "formula": "cancel_probability * adr * total_nights",
+  "boundaries": "LOW: loss < q50; MEDIUM: q50 <= loss < q75; HIGH: loss >= q75",
+  "transfer_note": "Validation 모델로 정한 경계를 최종 MLP에 그대로 적용; Test에서 경계 재조정하지 않음",
+  "created_at": "2026-09-01T07:46:06.980748+00:00",
+  "source_sha256": {
+    "split": "e6c099f243baa17870d63a3e611b35d10c7f23cdf96a221194fcf186dde42f37",
+    "val_model": "baa954ec61cfd0ebaeee041305a9e45c36c38af054efd3d69619b6a1279c188a",
+    "val_processor": "7b4347480cb43153210386f6285c358b40bcb6a8b40dd72601e87f03a4910b03",
+    "val_predictions": "a88b3219e8324afd25542142a34379dc09777e61538b274f767654e253f97bb2",
+    "final_model": "73aa24fe7921827560e9fc3c38a58e02f555ab68fcb53478e008d49f32de37b1",
+    "final_processor": "ca6070a9c43097c091f5a9ce7f7fffdd09f62d4fc816f6b1766dad2784ff6d0d",
+    "test_predictions": "109d8832e0ecb9c184df4bc7daa07e077767d5003b0078fe22454fc4f64f021d",
+    "capture": "0c4edc20edfb16317beb606a703137c62d8bfd43537eda431c838a3882c25792"
+  },
+  "summary_sha256": {
+    "mlp_risk_validation_summary.csv": "198f968e70e984c1394091346b019a0cdfdc62d2d0cef11d9588edb87642691b",
+    "mlp_risk_test_summary.csv": "c76b3b424df0ad87959d809f036836a4498cf67211f479fe9462fe88a80c765a"
+  }
+}

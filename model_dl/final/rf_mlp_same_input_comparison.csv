@@ -1,0 +1,3 @@
+﻿model,cancel_probability,cancel_probability_percent,prediction_threshold_0.5
+Random Forest,0.11954581839166048,11.954581839166048,0
+MLP,2.0598126866389066e-05,0.0020598126866389066,0

@@ -1,0 +1,22 @@
+{
+  "hotel": "City Hotel",
+  "arrival_date_month": "August",
+  "meal": "BB",
+  "market_segment": "Online TA",
+  "reserved_room_type": "A",
+  "customer_type": "Transient",
+  "country_group": "PRT",
+  "lead_time": 69,
+  "is_repeated_guest": 0,
+  "previous_cancellations": 0,
+  "previous_bookings_not_canceled": 0,
+  "adr": 80.1,
+  "required_car_parking_spaces": 0,
+  "total_of_special_requests": 0,
+  "has_agent": 1,
+  "has_company": 0,
+  "total_guests": 2,
+  "total_nights": 3,
+  "has_waiting_list": 0,
+  "has_children": 0
+}

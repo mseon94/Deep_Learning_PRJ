@@ -1,0 +1,2 @@
+﻿model,data_split,n_samples,threshold,epochs_run,best_epoch,training_seconds,accuracy,precision,recall,f1,roc_auc,tn,fp,fn,tp
+Baseline MLP - Re-run,Validation,18970,0.5,59,55,78.29856440005824,0.8561939905113337,0.8166034432448206,0.7918788907753254,0.8040511420772878,0.935934132474252,10645,1257,1471,5597

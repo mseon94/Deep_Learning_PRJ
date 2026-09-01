@@ -1,0 +1,36 @@
+{
+  "experiment": "Baseline MLP re-run",
+  "split_source": "D:\\pythonscript\\Deep_Learning_PRJ\\model_dl\\comparison\\common_data_split.joblib",
+  "seed": 42,
+  "units": [
+    128,
+    64,
+    32
+  ],
+  "hidden_activation": "relu",
+  "output_activation": "sigmoid",
+  "batch_norm_after_hidden_layers": [
+    1,
+    2
+  ],
+  "dropout_after_hidden_layers": [
+    0.3,
+    0.2,
+    0.0
+  ],
+  "l2": 0.0,
+  "optimizer": "Adam",
+  "learning_rate": 0.001,
+  "batch_size": 256,
+  "max_epochs": 100,
+  "loss": "binary_crossentropy",
+  "checkpoint_monitor": "val_roc_auc",
+  "early_stopping_patience": 12,
+  "early_stopping_min_delta": 0.0002,
+  "reduce_lr_monitor": "val_loss",
+  "reduce_lr_patience": 5,
+  "reduce_lr_factor": 0.5,
+  "min_learning_rate": 1e-05,
+  "threshold": 0.5,
+  "tensorflow_version": "2.21.0"
+}

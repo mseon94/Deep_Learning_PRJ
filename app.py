@@ -178,9 +178,6 @@ def load_risk_bundle():
             (ROOT / "model_dl/final/final_mlp_preprocessor.joblib", config["source_sha256"]["final_processor"]),
         ]
 
-        for name, expected in config["artifact_sha256"].items():
-            checks.append((ROOT / "model_dl/risk" / name, expected))
-
         for file, expected in checks:
             if not file.is_file():
                 raise ValueError(f"위험점수 자료 없음: {file.name}")

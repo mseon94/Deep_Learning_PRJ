@@ -1,16 +1,21 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "model": "MLP",
   "selection_split": "Validation",
-  "method": "expected_loss_quantiles",
+  "method": "validation_expected_loss_percentile",
+  "formula": "cancel_probability * adr * total_nights",
+  "risk_score": "Validation Expected Loss percentile (0-100)",
+  "risk_score_mapping": "np.interp(expected_loss, sorted_validation_expected_loss, np.linspace(0, 100, validation_n))",
   "q50": 60.261748758,
   "q75": 198.637126635,
+  "score_q50": 50.0,
+  "score_q75": 75.0,
   "validation_n": 18970,
   "test_n": 23712,
-  "formula": "cancel_probability * adr * total_nights",
-  "boundaries": "LOW: loss < q50; MEDIUM: q50 <= loss < q75; HIGH: loss >= q75",
-  "transfer_note": "Validation 모델로 정한 경계를 최종 MLP에 그대로 적용; Test에서 경계 재조정하지 않음",
-  "created_at": "2026-09-01T07:46:06.980748+00:00",
+  "boundaries": "LOW: score < 50; MEDIUM: 50 <= score < 75; HIGH: score >= 75",
+  "distribution_file": "mlp_risk_validation_distribution.csv",
+  "transfer_note": "위험점수 분포와 등급 기준은 Validation에서 확정하고 Common Test 및 Streamlit 신규 예약에 동일하게 적용; Test에서 재조정하지 않음",
+  "created_at": "2026-09-01T23:15:38.252271+00:00",
   "source_sha256": {
     "split": "e6c099f243baa17870d63a3e611b35d10c7f23cdf96a221194fcf186dde42f37",
     "val_model": "baa954ec61cfd0ebaeee041305a9e45c36c38af054efd3d69619b6a1279c188a",
@@ -21,8 +26,13 @@
     "test_predictions": "109d8832e0ecb9c184df4bc7daa07e077767d5003b0078fe22454fc4f64f021d",
     "capture": "0c4edc20edfb16317beb606a703137c62d8bfd43537eda431c838a3882c25792"
   },
+  "artifact_sha256": {
+    "mlp_risk_validation_distribution.csv": "227ec482740fed2f84d398ed733020d7cf0fa6dadd4c354d29489c4f4a425122",
+    "mlp_risk_validation_summary.csv": "5c3988f9e7108c6c546a5ad369accbe70b54794a69b93bea7e2cc016174560c5",
+    "mlp_risk_test_summary.csv": "164656d549b30bdaf28684c5f423e1d0b537dffc21a55155af91895b20cdd98f"
+  },
   "summary_sha256": {
-    "mlp_risk_validation_summary.csv": "198f968e70e984c1394091346b019a0cdfdc62d2d0cef11d9588edb87642691b",
-    "mlp_risk_test_summary.csv": "c76b3b424df0ad87959d809f036836a4498cf67211f479fe9462fe88a80c765a"
+    "mlp_risk_validation_summary.csv": "5c3988f9e7108c6c546a5ad369accbe70b54794a69b93bea7e2cc016174560c5",
+    "mlp_risk_test_summary.csv": "164656d549b30bdaf28684c5f423e1d0b537dffc21a55155af91895b20cdd98f"
   }
 }

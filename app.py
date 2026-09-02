@@ -105,43 +105,6 @@ st.markdown("""
     margin-bottom: 0.8rem;
 }
 
-.centered-result-label {
-    color: #6b7280;
-    font-size: 0.88rem;
-    line-height: 1.35;
-    margin-bottom: 0.35rem;
-    text-align: center;
-}
-
-.priority-result-value {
-    font-size: 1.65rem;
-    font-weight: 700;
-    line-height: 1.15;
-    text-align: center;
-    white-space: nowrap;
-}
-
-.amount-result-value {
-    font-size: 1.8rem;
-    font-weight: 400;
-    line-height: 1.2;
-    text-align: center;
-    white-space: nowrap;
-    padding-bottom: 24px;
-}
-
-.risk-badge.centered {
-    display: block;
-    margin-left: auto;
-    margin-right: auto;
-    width: fit-content;
-}
-
-.st-key-priority_progress {
-    margin-top: 12px;
-    margin-bottom: -12px;
-}
-
 </style>
 """, unsafe_allow_html=True)
 
@@ -189,32 +152,83 @@ def file_sha256(path, stamp):
 
 
 def load_risk_bundle():
-    path = ROOT / "model_dl/risk/mlp_risk_thresholds.json"
-    if not path.is_file():
-        return None, "위험등급 자료 없음: python prepare_mlp_risk.py"
+    config_path = ROOT / "model_dl/risk/mlp_risk_thresholds.json"
+    distribution_path = ROOT / "model_dl/risk/mlp_risk_validation_distribution.csv"
+
+    if not config_path.is_file():
+        return None, None, "위험점수 자료 없음: python prepare_mlp_risk.py"
+
     try:
-        with path.open(encoding="utf-8-sig") as file:
+        with config_path.open(encoding="utf-8-sig") as file:
             config = json.load(file)
-        if config.get("schema_version") != 2 or config.get("selection_split") != "Validation":
-            raise ValueError("위험등급 자료 형식 불일치")
-        low, high = float(config["q50"]), float(config["q75"])
-        if not np.isfinite([low, high]).all() or not 0 < low < high:
-            raise ValueError("위험등급 경계값 오류")
+
+        if (
+            config.get("schema_version") != 3
+            or config.get("selection_split") != "Validation"
+            or config.get("method") != "validation_expected_loss_percentile"
+        ):
+            raise ValueError("위험점수 자료 형식 불일치")
+
+        q50, q75 = float(config["q50"]), float(config["q75"])
+        if not np.isfinite([q50, q75]).all() or not 0 < q50 < q75:
+            raise ValueError("Expected Loss 경계값 오류")
+
         checks = [
             (ROOT / "model_dl/final/final_mlp.keras", config["source_sha256"]["final_model"]),
             (ROOT / "model_dl/final/final_mlp_preprocessor.joblib", config["source_sha256"]["final_processor"]),
         ]
-        for name in ["mlp_risk_validation_summary.csv", "mlp_risk_test_summary.csv"]:
-            checks.append((ROOT / "model_dl/risk" / name, config["summary_sha256"][name]))
+
+        for name, expected in config["artifact_sha256"].items():
+            checks.append((ROOT / "model_dl/risk" / name, expected))
+
         for file, expected in checks:
+            if not file.is_file():
+                raise ValueError(f"위험점수 자료 없음: {file.name}")
             if file_sha256(str(file), file.stat().st_mtime_ns) != expected:
-                raise ValueError(f"위험등급 자료와 파일 버전 불일치: {file.name}")
-        return config, None
+                raise ValueError(f"위험점수 자료와 파일 버전 불일치: {file.name}")
+
+        distribution = pd.read_csv(distribution_path)
+        required = {"expected_loss", "percentile_score"}
+        if not required.issubset(distribution.columns):
+            raise ValueError("Validation 위험점수 분포 컬럼 불일치")
+
+        expected_loss_values = distribution["expected_loss"].to_numpy(dtype=float)
+        percentile_values = distribution["percentile_score"].to_numpy(dtype=float)
+
+        if (
+            len(distribution) != int(config["validation_n"])
+            or len(distribution) < 2
+            or not np.isfinite(expected_loss_values).all()
+            or not np.isfinite(percentile_values).all()
+            or not np.all(expected_loss_values[:-1] <= expected_loss_values[1:])
+            or not np.all(percentile_values[:-1] <= percentile_values[1:])
+        ):
+            raise ValueError("Validation 위험점수 분포 값 오류")
+
+        return config, distribution, None
+
     except (OSError, ValueError, KeyError, TypeError) as error:
-        return None, f"위험등급 자료 오류: {error}"
+        return None, None, f"위험점수 자료 오류: {error}"
 
 
-risk_thresholds, risk_error = load_risk_bundle()
+def expected_loss_percentile_score(expected_loss, distribution):
+    if distribution is None:
+        return None
+
+    loss_values = distribution["expected_loss"].to_numpy(dtype=float)
+    score_values = distribution["percentile_score"].to_numpy(dtype=float)
+
+    score = np.interp(
+        float(expected_loss),
+        loss_values,
+        score_values,
+        left=0.0,
+        right=100.0,
+    )
+    return float(np.clip(score, 0.0, 100.0))
+
+
+risk_thresholds, risk_distribution, risk_error = load_risk_bundle()
 
 OPTIMIZED_THRESHOLD = 0.511
 config_path = ROOT / "model_dl/final/final_mlp_config.json"
@@ -456,7 +470,7 @@ with simulator_tab:
             submitted = st.form_submit_button(
                 "예약 취소 위험 분석",
                 type="primary",
-                use_container_width=True
+                width="stretch"
             )
             
             if submitted:
@@ -528,18 +542,17 @@ with simulator_tab:
                 )
 
                 risk_level, risk_score = None, None
-                if risk_thresholds is not None:
-                    q50, q75 = risk_thresholds["q50"], risk_thresholds["q75"]
-                    if expected_loss < q50:
-                        risk_score = (expected_loss / q50) * 50
+                if risk_thresholds is not None and risk_distribution is not None:
+                    risk_score = expected_loss_percentile_score(
+                        expected_loss,
+                        risk_distribution,
+                    )
+                    if risk_score < 50.0:
                         risk_level = "LOW"
-                    elif expected_loss < q75:
-                        risk_score = 50 + ((expected_loss - q50) / (q75 - q50)) * 25
+                    elif risk_score < 75.0:
                         risk_level = "MEDIUM"
                     else:
-                        risk_score = 75 + ((expected_loss - q75) / q75) * 25
                         risk_level = "HIGH"
-                    risk_score = min(max(risk_score, 0.0), 100.0)
                     
                     
         with result_col:
@@ -555,99 +568,78 @@ with simulator_tab:
                     st.progress(
                         min(cancel_probability, 1.0)
                     )
-                    
+
+                    st.caption(
+                        "분류 기준: Validation Accuracy "
+                        f"최적 임계값 {OPTIMIZED_THRESHOLD:.3f}"
+                    )
+
                     st.divider()
 
                     score_col1, score_col2 = st.columns(2)
                     if risk_error:
                         st.warning(risk_error)
+                    else:
+                        st.caption(
+                            "위험점수 = Validation Expected Loss 백분위 | "
+                            "LOW < 50 · MEDIUM 50~74 · HIGH ≥ 75"
+                        )
 
                     with score_col1:
-                        st.markdown(
-                            '<div class="centered-result-label">'
-                            '관리 우선순위 점수'
-                            '</div>',
-                            unsafe_allow_html=True
-                        )
-
-                        score_text = (
-                            f"{risk_score:.0f} / 100"
-                            if risk_score is not None
-                            else "—"
-                        )
-
-                        st.markdown(
-                            f'<div class="priority-result-value">'
-                            f'{score_text}'
-                            f'</div>',
-                            unsafe_allow_html=True
-                        )
+                        st.markdown('<div class="result-label">위험점수</div>', unsafe_allow_html=True)
+                        score_text = f"{risk_score:.0f} / 100" if risk_score is not None else "—"
+                        st.markdown(f'<div class="result-value">{score_text}</div>', unsafe_allow_html=True)
 
                     with score_col2:
-                        st.markdown(
-                            '<div class="centered-result-label">'
-                            '손실 위험 등급'
-                            '</div>',
-                            unsafe_allow_html=True
-                        )
+                        st.markdown('<div class="result-label">손실 위험 등급</div>', unsafe_allow_html=True)
 
                         if risk_level == "LOW":
                             st.markdown(
-                                '<div class="risk-badge low centered">LOW</div>',
+                                '<div class="risk-badge low">LOW</div>',
                                 unsafe_allow_html=True
                             )
 
                         elif risk_level == "MEDIUM":
                             st.markdown(
-                                '<div class="risk-badge medium centered">MEDIUM</div>',
+                                '<div class="risk-badge medium">MEDIUM</div>',
                                 unsafe_allow_html=True
                             )
 
                         elif risk_level == "HIGH":
                             st.markdown(
-                                '<div class="risk-badge high centered">HIGH</div>',
+                                '<div class="risk-badge high">HIGH</div>',
                                 unsafe_allow_html=True
                             )
 
                         else:
                             st.write("—")
                     if risk_score is not None:
-                        with st.container(key="priority_progress"):
-                            st.progress(min(risk_score / 100, 1.0))
-                    
+                        st.progress(min(risk_score / 100, 1.0))
+
                     st.divider()
 
                     amount_col1, amount_col2 = st.columns(2)
 
                     with amount_col1:
-                        st.markdown(
-                            '<div class="centered-result-label">'
-                            '예약 금액 지표'
-                            '</div>',
-                            unsafe_allow_html=True
-                        )
-
-                        st.markdown(
-                            f'<div class="amount-result-value">'
-                            f'{booking_amount:,.2f}'
-                            f'</div>',
-                            unsafe_allow_html=True
+                        st.metric(
+                            "예약 금액 지표",
+                            f"{booking_amount:,.2f}"
                         )
 
                     with amount_col2:
-                        st.markdown(
-                            '<div class="centered-result-label">'
-                            '예상 손실 지표'
-                            '</div>',
-                            unsafe_allow_html=True
+                        st.metric(
+                            "예상 손실 지표",
+                            expected_loss_text
                         )
 
-                        st.markdown(
-                            f'<div class="amount-result-value">'
-                            f'{expected_loss_text}'
-                            f'</div>',
-                            unsafe_allow_html=True
-                        )
+                    st.caption(
+                        "예상 손실 지표 = 취소확률 × ADR × 총 숙박일"
+                    )
+                    st.caption("금액 단위: 원본 ADR 기준")
+                    if prediction:
+                        st.error("취소 위험 예약으로 예측")
+                    else:
+                        st.success("정상 유지 예약으로 예측")
                         
                 else:
                     with st.container(border=True):
@@ -691,7 +683,7 @@ def metric_rows(frame, threshold=0.5):
 
 
 def show_table(frame, name):
-    st.dataframe(frame.round(4), hide_index=True, use_container_width=True)
+    st.dataframe(frame.round(4), hide_index=True, width="stretch")
     st.download_button(
         "이 표 CSV 다운로드", frame.to_csv(index=False).encode("utf-8-sig"),
         file_name=name, mime="text/csv", key=name
@@ -728,7 +720,7 @@ def performance_plot(frame, title):
 def saved_image(relative_path, caption):
     path = ROOT / relative_path
     if path.is_file():
-        st.image(str(path), caption=caption, use_container_width=True)
+        st.image(str(path), caption=caption, width="stretch")
     else:
         st.warning(f"그림 파일 없음: {relative_path}")
 
@@ -818,7 +810,7 @@ with dashboard_tab:
                     "max_val_accuracy_epoch": int(np.argmax(history["val_accuracy"])) + 1,
                     "max_val_roc_auc_epoch": int(np.argmax(history["val_roc_auc"])) + 1
                 })
-            st.dataframe(pd.DataFrame(summaries), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(summaries), hide_index=True, width="stretch")
         st.caption("Loss 구성 — 기본: BCE | 개선: BCE + L2")
 
     with search_tab:
@@ -834,7 +826,7 @@ with dashboard_tab:
                 ok = frame.loc[frame["status"].eq("ok")]
                 search_frames.append({"실험": label, "정상 완료": len(ok), "오류 기록": int(frame["status"].eq("error").sum())})
         if search_frames:
-            st.dataframe(pd.DataFrame(search_frames), hide_index=True, use_container_width=True)
+            st.dataframe(pd.DataFrame(search_frames), hide_index=True, width="stretch")
         st.caption("탐색 변수: 층 수·너비 / Dropout / L2 / 학습률 / 배치 크기 / BatchNorm / 옵티마이저")
         summary = dashboard_csv("model_dl/stability/stability_summary.csv", ["units", "optimizer", "runs", "mean_roc_auc", "std_roc_auc"])
         if summary is not None:
@@ -857,7 +849,8 @@ with dashboard_tab:
         st.markdown("### 최종 MLP 구조·설정")
         st.code("Input 64 → Dense 256 → BN → Dropout\n         → Dense 128 → BN → Dropout\n         → Dense  64 → BN → Dropout\n         → Dense   1 (Sigmoid)", language="text")
         st.caption("ReLU · Dropout 0.4 · L2 0.0005 · Adam 0.0005 · 배치 512 · 전체 Train 107 Epoch")
-
+        if final_config:
+            st.json(final_config)
 
     with test_tab:
         st.markdown("### 검증 완료한 공통 Test 비교")
@@ -889,7 +882,7 @@ with dashboard_tab:
                 "항목": ["모델 계열", "학습 방식", "확률 산출"],
                 "Random Forest": ["결정트리 앙상블", "여러 트리의 분할 학습", "트리별 클래스 확률 평균"],
                 "MLP": ["다층 신경망", "역전파·Adam", "출력층 Sigmoid"]
-            }), hide_index=True, use_container_width=True)
+            }), hide_index=True, width="stretch")
             saved_image("model_dl/comparison/verified_test/rf_mlp_common_test_roc.png", "공통 Test ROC 곡선 — 분류 임계값과 무관한 확률 순위 비교")
             saved_image("model_dl/comparison/verified_test/rf_mlp_common_test_confusion.png", "공통 Test 혼동행렬 — 두 모델 모두 임계값 0.5")
 
@@ -918,7 +911,7 @@ with dashboard_tab:
         st.caption("선정 기준: Validation Accuracy | 평가: Test | 모델 예측확률 고정")
 
     with reference_tab:
-        st.markdown("### MLP 손실 위험등급")
+        st.markdown("### MLP 위험점수 및 위험등급")
         st.caption("예상 손실 지표 = 취소확률 × ADR × 숙박일 | 금액 단위: 원본 ADR 기준")
         if risk_error:
             st.warning(risk_error)
@@ -926,10 +919,18 @@ with dashboard_tab:
             q50, q75 = risk_thresholds["q50"], risk_thresholds["q75"]
             st.dataframe(pd.DataFrame({
                 "등급": ["LOW", "MEDIUM", "HIGH"],
-                "예상 손실 지표 범위": [f"{q50:,.6f} 미만", f"{q50:,.6f} 이상 ~ {q75:,.6f} 미만", f"{q75:,.6f} 이상"],
-                "Validation 기준 구간": ["하위 50%", "상위 25~50%", "상위 25%"]
-            }), hide_index=True, use_container_width=True)
-            st.caption("경계 선정: Validation | Test 평가: 경계 고정")
+                "위험점수": ["0 ~ 49", "50 ~ 74", "75 ~ 100"],
+                "Validation 기준": ["하위 50%", "50 ~ 75백분위", "상위 25%"],
+                "Expected Loss 경계(참고)": [
+                    f"{q50:,.6f} 미만",
+                    f"{q50:,.6f} 이상 ~ {q75:,.6f} 미만",
+                    f"{q75:,.6f} 이상",
+                ],
+            }), hide_index=True, width="stretch")
+            st.caption(
+                "위험점수 = Validation Expected Loss 백분위(0~100) | "
+                "Validation에서 기준 확정 후 Common Test·서비스에 동일 적용"
+            )
             risk_frames = []
             for name, filename in [("Validation", "mlp_risk_validation_summary.csv"), ("Common Test", "mlp_risk_test_summary.csv")]:
                 frame = dashboard_csv("model_dl/risk/" + filename, [
@@ -971,7 +972,7 @@ with dashboard_tab:
         st.caption("지표 정의: 취소 예약금액 = 실제 취소 여부 × ADR × 숙박일")
         with st.expander("기존 RF 참고 분석 — MLP 중요도·공통 Test 결과가 아님"):
             st.caption("이전 RF 분석 기록")
-            st.dataframe(rf_results.round(4), hide_index=True, use_container_width=True)
+            st.dataframe(rf_results.round(4), hide_index=True, width="stretch")
             top = importance_df.sort_values("Importance")
             fig, ax = plt.subplots(figsize=(9, 5))
             ax.barh(top["Feature"], top["Importance"], color=COLORS[0])
@@ -981,4 +982,4 @@ with dashboard_tab:
                 "기존 RF 위험등급": ["LOW", "MEDIUM", "HIGH"],
                 "기존 RF Validation 실제 취소율(%)": [10.3, 53.8, 74.5],
                 "기존 RF 평균 예상 손실 지표": [22.269, 124.273, 387.696]
-            }), hide_index=True, use_container_width=True)
+            }), hide_index=True, width="stretch")

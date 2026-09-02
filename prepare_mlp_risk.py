@@ -1,8 +1,11 @@
 """프로젝트 루트에서 한 번 실행: python prepare_mlp_risk.py
 
-모델/전처리기를 재학습하지 않습니다. 저장된 분할과 예측을 대조한 뒤
-MLP Validation의 예상 손실 50/75% 분위수를 고정하고 Test에 적용합니다.
-생성/교체 대상은 model_dl/risk/의 전용 자료 세 파일뿐입니다.
+모델/전처리기를 재학습하지 않습니다.
+저장된 Validation/Test 분할과 예측확률을 대조한 뒤,
+1) Expected Loss = 취소확률 × ADR × 총 숙박일수
+2) Validation Expected Loss 전체 분포를 기준으로 위험점수(0~100)를 계산
+3) 위험점수 50/75점을 기준으로 LOW / MEDIUM / HIGH를 구분
+하는 서비스용 위험도 자료를 생성합니다.
 """
 from pathlib import Path
 from datetime import datetime, timezone
@@ -34,21 +37,42 @@ def probabilities(model, processor, frame):
     return result
 
 
-def risk_summary(frame, y, probability, q50, q75, split_name):
+def percentile_scores(expected_loss, sorted_validation_loss):
+    """Validation Expected Loss 분포 내 위치를 0~100점으로 변환."""
+    expected_loss = np.asarray(expected_loss, dtype=float)
+    sorted_validation_loss = np.asarray(sorted_validation_loss, dtype=float)
+    require(len(sorted_validation_loss) >= 2, "Validation Expected Loss 분포가 너무 작습니다.")
+    require(np.isfinite(sorted_validation_loss).all(), "Validation Expected Loss에 유효하지 않은 값이 있습니다.")
+    require(np.all(sorted_validation_loss[:-1] <= sorted_validation_loss[1:]), "Validation Expected Loss가 정렬되어 있지 않습니다.")
+    percentile_axis = np.linspace(0.0, 100.0, len(sorted_validation_loss), dtype=float)
+    score = np.interp(expected_loss, sorted_validation_loss, percentile_axis, left=0.0, right=100.0)
+    return np.clip(score, 0.0, 100.0)
+
+
+def risk_summary(frame, y, probability, sorted_validation_loss, split_name):
     amounts = frame["adr"].to_numpy(dtype=float) * frame["total_nights"].to_numpy(dtype=float)
     require(np.isfinite(amounts).all() and (amounts >= 0).all(), "예약 금액 지표가 유효하지 않습니다.")
     loss = amounts * probability
-    levels = np.where(loss < q50, "LOW", np.where(loss < q75, "MEDIUM", "HIGH"))
+    scores = percentile_scores(loss, sorted_validation_loss)
+    levels = np.where(scores < 50.0, "LOW", np.where(scores < 75.0, "MEDIUM", "HIGH"))
     actual = np.asarray(y, dtype=float)
     require(len(actual) == len(frame) == len(probability), "위험등급 집계 길이가 다릅니다.")
-    data = pd.DataFrame({"risk_level": levels, "actual": actual, "probability": probability,
-                         "loss": loss, "canceled_amount": actual * amounts})
+    data = pd.DataFrame({
+        "risk_level": levels,
+        "risk_score": scores,
+        "actual": actual,
+        "probability": probability,
+        "loss": loss,
+        "canceled_amount": actual * amounts,
+    })
     result = data.groupby("risk_level").agg(
-        n_samples=("actual", "size"), canceled=("actual", "sum"),
+        n_samples=("actual", "size"),
+        canceled=("actual", "sum"),
         actual_cancel_rate=("actual", "mean"),
         mean_probability=("probability", "mean"),
+        mean_risk_score=("risk_score", "mean"),
         mean_expected_loss=("loss", "mean"),
-        canceled_booking_amount=("canceled_amount", "sum")
+        canceled_booking_amount=("canceled_amount", "sum"),
     ).reindex(LEVELS)
     result["n_samples"] = result["n_samples"].fillna(0).astype(int)
     result["canceled"] = result["canceled"].fillna(0).astype(int)
@@ -88,6 +112,7 @@ def main():
     split = joblib.load(paths["split"])
     val_x, val_y = split["X_val"], split["y_val"]
     test_x, test_y = split["X_test"], split["y_test"]
+
     for x, y in [(val_x, val_y), (test_x, test_y)]:
         require(x.index.is_unique and y.index.is_unique and x.index.equals(y.index), "분할 내 예약 인덱스·정답 순서가 다릅니다.")
         require(pd.Series(y).isin([0, 1]).all(), "정답은 0/1이어야 합니다.")
@@ -102,18 +127,23 @@ def main():
     require(len(saved_val) == len(val_y), "Validation 저장 건수가 다릅니다.")
     require(np.array_equal(saved_val["y_true"].to_numpy(), val_y.to_numpy()), "Validation 정답 순서가 다릅니다.")
     require(np.allclose(saved_val["cancel_probability"], val_p, rtol=1e-5, atol=1e-6), "Validation 확률 대조 실패: 전처리기와 모델의 조합을 확인하세요. 자료를 저장하지 않습니다.")
-    # 재실행 시 부동소수점 차이를 피하도록, 대조를 통과한 저장 확률을 사용
     val_p = saved_val["cancel_probability"].to_numpy(dtype=float)
-    val_loss = val_p * val_x["adr"].to_numpy(dtype=float) * val_x["total_nights"].to_numpy(dtype=float)
+
+    val_amount = val_x["adr"].to_numpy(dtype=float) * val_x["total_nights"].to_numpy(dtype=float)
+    val_loss = val_p * val_amount
+    require(np.isfinite(val_loss).all() and (val_loss >= 0).all(), "Validation Expected Loss가 유효하지 않습니다.")
+    sorted_val_loss = np.sort(val_loss)
+
     capture = pd.read_csv(paths["capture"])
-    medium = capture.loc[np.isclose(capture["target_review_share"], .50)]
-    high = capture.loc[np.isclose(capture["target_review_share"], .25)]
+    medium = capture.loc[np.isclose(capture["target_review_share"], 0.50)]
+    high = capture.loc[np.isclose(capture["target_review_share"], 0.25)]
     require(len(medium) == len(high) == 1, "포착률 분석표에서 상위 25%·50% 행을 확인하세요.")
     q50 = float(medium.iloc[0]["expected_loss_threshold"])
     q75 = float(high.iloc[0]["expected_loss_threshold"])
-    require(np.allclose([q50, q75], np.quantile(val_loss, [.5,.75]), rtol=1e-9, atol=1e-8),
-            "포착률 분석의 경계값이 현재 Validation 자료와 일치하지 않습니다.")
-    require(np.isfinite([q50, q75]).all() and 0 < q50 < q75, "분위수가 0 또는 중복입니다. 점수 산식을 확인해야 합니다.")
+    require(np.allclose([q50, q75], np.quantile(val_loss, [0.50, 0.75]), rtol=1e-9, atol=1e-8), "포착률 분석의 경계값이 현재 Validation 자료와 일치하지 않습니다.")
+    require(np.isfinite([q50, q75]).all() and 0 < q50 < q75, "분위수가 0 또는 중복입니다.")
+    q_scores = percentile_scores(np.array([q50, q75]), sorted_val_loss)
+    require(np.allclose(q_scores, [50.0, 75.0], atol=0.05), "Validation 분위수와 위험점수 매핑이 50/75점에 맞지 않습니다.")
 
     print("2/3 공통 Test 인덱스·정답·최종 MLP 확률 대조 중")
     saved_test = pd.read_csv(paths["test_predictions"])
@@ -128,31 +158,64 @@ def main():
     require(np.allclose(saved_test["mlp_probability"], test_p, rtol=1e-5, atol=1e-6), "최종 MLP Test 확률이 기존 공통 Test 자료와 다릅니다.")
     test_p = saved_test["mlp_probability"].to_numpy(dtype=float)
 
-    val_summary = risk_summary(val_x, val_y, val_p, q50, q75, "Validation")
-    test_summary = risk_summary(test_x, test_y, test_p, q50, q75, "Common Test")
+    val_summary = risk_summary(val_x, val_y, val_p, sorted_val_loss, "Validation")
+    test_summary = risk_summary(test_x, test_y, test_p, sorted_val_loss, "Common Test")
+    distribution = pd.DataFrame({
+        "expected_loss": sorted_val_loss,
+        "percentile_score": np.linspace(0.0, 100.0, len(sorted_val_loss)),
+    })
+
     config = {
-        "schema_version": 2, "model": "MLP", "selection_split": "Validation",
-        "method": "expected_loss_quantiles", "q50": float(q50), "q75": float(q75),
-        "validation_n": len(val_x), "test_n": len(test_x),
+        "schema_version": 3,
+        "model": "MLP",
+        "selection_split": "Validation",
+        "method": "validation_expected_loss_percentile",
         "formula": "cancel_probability * adr * total_nights",
-        "boundaries": "LOW: loss < q50; MEDIUM: q50 <= loss < q75; HIGH: loss >= q75",
-        "transfer_note": "Validation 모델로 정한 경계를 최종 MLP에 그대로 적용; Test에서 경계 재조정하지 않음",
+        "risk_score": "Validation Expected Loss percentile (0-100)",
+        "risk_score_mapping": "np.interp(expected_loss, sorted_validation_expected_loss, np.linspace(0, 100, validation_n))",
+        "q50": float(q50),
+        "q75": float(q75),
+        "score_q50": 50.0,
+        "score_q75": 75.0,
+        "validation_n": len(val_x),
+        "test_n": len(test_x),
+        "boundaries": "LOW: score < 50; MEDIUM: 50 <= score < 75; HIGH: score >= 75",
+        "distribution_file": "mlp_risk_validation_distribution.csv",
+        "transfer_note": "위험점수 분포와 등급 기준은 Validation에서 확정하고 Common Test 및 Streamlit 신규 예약에 동일하게 적용; Test에서 재조정하지 않음",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "source_sha256": {name: sha256(path) for name, path in paths.items()},
     }
+
     output = ROOT / "model_dl/risk"
     output.mkdir(parents=True, exist_ok=True)
-    # 대조가 전부 통과한 뒤에만 전용 결과를 기록. 기존 모델·원본 CSV는 변경하지 않음.
-    with tempfile.TemporaryDirectory(prefix="risk_export_", dir=output) as temp:
-        temp = Path(temp)
-        val_summary.to_csv(temp / "mlp_risk_validation_summary.csv", index=False, encoding="utf-8-sig")
-        test_summary.to_csv(temp / "mlp_risk_test_summary.csv", index=False, encoding="utf-8-sig")
-        config["summary_sha256"] = {name: sha256(temp / name) for name in
-            ["mlp_risk_validation_summary.csv", "mlp_risk_test_summary.csv"]}
-        (temp / "mlp_risk_thresholds.json").write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
-        for name in ["mlp_risk_validation_summary.csv", "mlp_risk_test_summary.csv", "mlp_risk_thresholds.json"]:
+
+    with tempfile.TemporaryDirectory(prefix="risk_export_", dir=output) as temp_dir:
+        temp = Path(temp_dir)
+        distribution_name = "mlp_risk_validation_distribution.csv"
+        val_summary_name = "mlp_risk_validation_summary.csv"
+        test_summary_name = "mlp_risk_test_summary.csv"
+        config_name = "mlp_risk_thresholds.json"
+
+        distribution.to_csv(temp / distribution_name, index=False, encoding="utf-8-sig")
+        val_summary.to_csv(temp / val_summary_name, index=False, encoding="utf-8-sig")
+        test_summary.to_csv(temp / test_summary_name, index=False, encoding="utf-8-sig")
+
+        artifact_names = [distribution_name, val_summary_name, test_summary_name]
+        config["artifact_sha256"] = {name: sha256(temp / name) for name in artifact_names}
+        config["summary_sha256"] = {
+            name: config["artifact_sha256"][name]
+            for name in [val_summary_name, test_summary_name]
+        }
+        (temp / config_name).write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        for name in artifact_names + [config_name]:
             os.replace(temp / name, output / name)
-    print(f"3/3 저장 완료: {output}\nMLP q50={q50:.6f}, q75={q75:.6f}")
+
+    print(f"3/3 저장 완료: {output}")
+    print(f"Validation q50={q50:.6f} → 위험점수 50점")
+    print(f"Validation q75={q75:.6f} → 위험점수 75점")
+    print(f"Validation 분포 저장 건수: {len(distribution):,}")
+    print()
     print(test_summary.to_string(index=False))
 
 
